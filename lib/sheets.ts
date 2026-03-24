@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import { unstable_cache } from 'next/cache';
 
 const SHEET_ID = process.env.GOOGLE_SHEET_ID!;
 
@@ -6,7 +7,7 @@ function getAuth() {
   return new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n').replace(/^"|"$/g, ''),
     },
     scopes: [
       'https://www.googleapis.com/auth/spreadsheets.readonly',
@@ -16,6 +17,7 @@ function getAuth() {
 }
 
 export interface Transaction {
+// ... omitting unchanged interface code
   fecha: string;
   banco: string;
   cuenta_tipo: string;
@@ -79,39 +81,40 @@ function rowToTransaction(row: string[]): Transaction {
 }
 
 function parseDate(fechaStr: string): { month: number; year: number } | null {
-  // Google Sheets (con locale de USA o formato automático) frecuentemente devuelve M/D/YYYY
-  // Si Gemini insertó DD/MM/YYYY como string, puede seguir siendo DD/MM/YYYY si no se convierte.
-  // La estrategia más segura: si el primer número es > 12, es DD/MM. Si no, asumimos MM/DD.
   const parts = fechaStr.split('/');
   if (parts.length === 3) {
     let m = parseInt(parts[0]);
     let d = parseInt(parts[1]);
     let y = parseInt(parts[2]);
     
-    // Si la hoja devolvió D/M/YYYY y el día es mayor a 12, sabemos segurísimo que el mes es el segundo.
     if (m > 12) {
       return { month: d, year: y };
     }
-    // Si la hoja usa el estándar M/D/YYYY (Locale US):
     return { month: m, year: y };
   }
   return null;
 }
+
+const getCachedSheet = unstable_cache(
+  async (sheet: string) => {
+    const auth = getAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `${sheet}!A2:Q10000`, 
+    });
+    return response.data.values || [];
+  },
+  ['google-sheets-data'],
+  { tags: ['sheets'], revalidate: 60 }
+);
 
 export async function getTransactions(
   sheet: string,
   month?: number,
   year?: number
 ): Promise<Transaction[]> {
-  const auth = getAuth();
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `${sheet}!A2:Q10000`, // Skip header row
-  });
-
-  const rows = response.data.values || [];
+  const rows = await getCachedSheet(sheet);
 
   let transactions = rows
     .filter((row) => row.length >= 11 && row[COL.fecha])
