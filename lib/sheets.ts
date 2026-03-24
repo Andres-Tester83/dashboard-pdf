@@ -95,8 +95,8 @@ function parseDate(fechaStr: string): { month: number; year: number } | null {
   return null;
 }
 
-const getCachedSheet = unstable_cache(
-  async (sheet: string) => {
+const getCachedSheet = (sheet: string) => unstable_cache(
+  async () => {
     const auth = getAuth();
     const sheets = google.sheets({ version: 'v4', auth });
     const response = await sheets.spreadsheets.values.get({
@@ -105,9 +105,9 @@ const getCachedSheet = unstable_cache(
     });
     return response.data.values || [];
   },
-  ['google-sheets-data'],
-  { tags: ['sheets'], revalidate: 60 }
-);
+  ['google-sheets-data', sheet],
+  { tags: ['sheets', sheet], revalidate: 60 }
+)();
 
 export async function getTransactions(
   sheet: string,
